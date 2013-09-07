@@ -1,20 +1,22 @@
 #include <rotary.h>
 
+#define HEART 1
+//#define BRAIN 1
+
 #include <WriteLight.h>
 #include <Metro.h>
 #include <SoftwareSerial.h>
 
-#define HEART 1
-//#define BRAIN 1
-// | 
 #ifdef BRAIN
   #define MODE (LIGHT_MODE_LOCAL_WRITE | LIGHT_MODE_SERIAL_DEBUG | LIGHT_MODE_SERIAL_READ)
   #define FAKE false
   #define BUTTON 31
-#else
-  #define MODE (LIGHT_MODE_SERIAL_DEBUG | LIGHT_MODE_SERIAL_WRITE | LIGHT_MODE_ANIMATE)
+//  #define SERIAL Serial1
+#else //
+  #define MODE (LIGHT_MODE_SERIAL_DEBUG|  LIGHT_MODE_SERIAL_WRITE | LIGHT_MODE_ANIMATE)
   #define FAKE false
-  #define BUTTON 5
+  #define BUTTON A0
+//  #define SERIAL Serial2
 #endif
 
 WriteLight light1(LIGHT_UNIT_1);
@@ -29,14 +31,25 @@ WriteLight lights(LIGHT_UNIT_ALL);
 //int bInt              = 255;
 
 
-const int INPUT_MAX(200);
+const int INPUT_MAX(500);
 const int RANGE_MAX(255);
 // Rotary Input
 // the order selects the pin assignment
+#ifdef HEART
 Rotary redRotary(INPUT_MAX, RANGE_MAX, FAKE);    // pins 2,3   (A,B)  A is yellow, B is purple
 Rotary greenRotary(INPUT_MAX, RANGE_MAX, FAKE);  // pins 21,20 (A,B)
 Rotary blueRotary(INPUT_MAX, RANGE_MAX, FAKE);   // pins 19,18 (A,B)
-
+#else
+class rotary {
+  public:
+  int value(void){};
+  void loop(){};
+  void setup(rotary&){};
+};
+rotary redRotary;
+rotary greenRotary;
+rotary blueRotary;
+#endif
 // black ground
 // gray channel A
 // red vcc
@@ -72,7 +85,7 @@ enum ANIMATION_STATE {
   ANIMATION_COP,
   ANIMATION_OFF,
   ANIMATION_END
-} g_state(ANIMATION_START);
+} g_state(ANIMATION_GLOW);
 
 // animation functions
 void glow();
@@ -99,19 +112,29 @@ void handleButton();
 void reportState(void);
 
 void debounce() {
-  bool current_state(digitalRead(button_pin));
+  int button = analogRead(button_pin);
+//  Serial.println(button,DEC);
+  bool current_state(button > 500);
+  
   if(debouncing) {
     if(millis() > debounce_time + debounce_timeout) {
       debouncing = false;
-      button_pressed = current_state;
-      if(button_pressed) {
-        Serial.println("Button pressed");
-        handleButton();
+//      Serial.println(current_state);
+      if(current_state != button_pressed) {
+        button_pressed = current_state;
+//        Serial.print("DEBOUNCED: ");
+        if(button_pressed) {
+//          Serial.println("PRESSED");
+          handleButton();
+        } else {
+//          Serial.println("RELEASED");
+          //handleButton();
+        }
       }
     }
   } else {
     if(current_state != button_pressed) {
-      Serial.println("Debouncing");
+//      Serial.println("Debouncing");
       debouncing = true;
       debounce_time = millis();
     }
@@ -285,9 +308,10 @@ void random_lights() {
   }
 }
 
-Metro animation_timer(1000/100); // 100 frames/second
+Metro animation_timer(1000/10); // 100 frames/second
 void animate() {
-  
+  if(!animation_timer.check())
+    return;
   switch(g_state) {
   case ANIMATION_ON : lights_on(); break;
   case ANIMATION_GLOW: glow(); break;
@@ -300,7 +324,8 @@ void animate() {
   case ANIMATION_OFF: lights_off();break;
   case ANIMATION_COP: cop();break;
   default:
-    Serial.println("ERROR: unknown state in animate");
+    Serial.print("ERROR: unknown state in animate");
+    Serial.println(g_state);
   }
     
   return;
@@ -328,18 +353,18 @@ Metro cop_timer(300); // alernate about every half second
 bool cop_state(false);
 
 void cop(void) {
-  if(cop_timer.check()) {
-    if(cop_state) {
-      light1.write(255,0,0); break; 1/3 alternate red
-      light2.write(0,0,255); break; 2/4 alternate blue
-      light3.write(0,0,0); break; 
-      light4.write(0,0,0); break;
-    } else {
-      light1.write(0,0,0); break; 
-      light2.write(0,0,0); break;
-      light3.write(255,0,0); break; 1/3 alternate red
-      light4.write(0,0,255); break; 2/4 alternate blue
-    }  
+  if(!cop_timer.check()) 
+    return;
+  if(cop_state) {
+    light1.write(255,0,0); // 1/3 alternate red
+    light2.write(0,0,255); // 2/4 alternate blue
+    light3.write(0,0,0); 
+    light4.write(0,0,0); 
+  } else {
+    light1.write(0,0,0); 
+    light2.write(0,0,0); 
+    light3.write(255,0,0); // 1/3 alternate red
+    light4.write(0,0,255); // 2/4 alternate blue
 
   cop_state=!cop_state;
   } 
@@ -348,7 +373,9 @@ void cop(void) {
 void setup() {
   delay(100);
   Serial.begin(115200); // &Serial
+  Serial1.begin(9600);
   Serial2.begin(9600);
+  
   WriteLight::setup(MODE); // sets up the output pins 
   
   redRotary.setup(redRotary);
@@ -359,14 +386,15 @@ void setup() {
   Serial.println(MODE);
   
   // and set up the button
-  pinMode(button_pin, INPUT_PULLUP);
+  pinMode(button_pin, INPUT);
 }
 
 void loop() {
   debounce();
   if(WriteLight::isAnimated()) {
 //    if(MODE & LIGHT_MODE_SERIAL_DEBUG)
-//      dumpState();
+      dumpState();
+  
     animate();
   }
 
@@ -378,18 +406,21 @@ void loop() {
 
 
 void dumpState(void) {  
+  Serial.print("\t\t\t");
   switch(g_state) {
-  case ANIMATION_ON : Serial.print("lights_on()"); break;
-  case ANIMATION_GLOW: Serial.print("glow()"); break;
-  case ANIMATION_BLINK: Serial.print("blink()"); break;
-  case ANIMATION_PULSE: Serial.print("pulse()"); break;
-  case ANIMATION_POP: Serial.print("pop_lights()"); break;
+  case ANIMATION_ON : Serial.println("lights_on()"); break;
+  case ANIMATION_GLOW: Serial.println("glow()"); break;
+  case ANIMATION_BLINK: Serial.println("blink()"); break;
+  case ANIMATION_PULSE: Serial.println("pulse()"); break;
+  case ANIMATION_POP: Serial.println("pop_lights()"); break;
 //  case ANIMATION_LISTEN: Serial.println("listen()"); break;
 //  case ANIMATION_CYCLE: listen(); break;
-  case ANIMATION_RANDOM: Serial.print("random_lights()"); break;
-  case ANIMATION_OFF: Serial.print("lights_off()");break;
+  case ANIMATION_COP: Serial.println("cop!");break;
+  case ANIMATION_RANDOM: Serial.println("random_lights()"); break;
+  case ANIMATION_OFF: Serial.println("lights_off()");break;
   default:
-    Serial.println("ERROR: unknown state in animate");
+    Serial.print("ERROR: unknown state in dumpstate: ");
+    Serial.println(g_state);
   }
   return;
 }    
